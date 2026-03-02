@@ -16,6 +16,8 @@ tags:
 status: approved
 created: 2026-03-02
 updated: 2026-03-02
+related:
+  - keycloak-delegated-admin-guard-spi.md
 ---
 
 # Keycloak Fine-Grained Admin Permissions v2 (FGAP v2)
@@ -270,15 +272,33 @@ GET       clients/{mgmt_id}/authz/resource-server/resource
 
 ## Effective Behaviour Matrix
 
-| Action | All Clients | System Clients (broker, realm-mgmt, etc.) | Own Created Clients |
-|---|---|---|---|
-| **View/List** | ✅ Allowed | ✅ Allowed (view scope) | ✅ Allowed |
-| **Create** | ✅ Allowed (manage on type) | N/A | N/A |
-| **Update/Configure** | ✅ Allowed | ❌ 403 (NEGATIVE deny) | ✅ Allowed |
-| **Deactivate (enable=false)** | ✅ Allowed | ❌ 403 (NEGATIVE deny) | ✅ Allowed |
-| **Delete** | ✅ Allowed* | ❌ 403 (NEGATIVE deny) | ✅ Allowed |
+With FGAP v2 permissions + `delegated-admin-guard` SPI:
 
-> *In FGAP v2, `manage` scope encompasses both update AND delete. There is no separate `delete` scope for clients. Blocking delete on own-created clients requires a custom event listener SPI.
+| Action | All Clients | System Clients (broker, realm-mgmt, etc.) | Own Created Clients | Client Scopes |
+|---|---|---|---|---|
+| **View/List** | ✅ Allowed | ✅ Allowed (view scope) | ✅ Allowed | ✅ Allowed (read-only) |
+| **Create** | ✅ Allowed (manage on type) | N/A | N/A | ❌ 403 (guard SPI) |
+| **Update/Configure** | ✅ Allowed | ❌ 403 (NEGATIVE deny) | ✅ Allowed | ❌ 403 (guard SPI) |
+| **Deactivate (enable=false)** | ✅ Allowed | ❌ 403 (NEGATIVE deny) | ✅ Allowed | N/A |
+| **Delete** | ❌ 403 (guard SPI) | ❌ 403 (NEGATIVE deny) | ❌ 403 (guard SPI) | ❌ 403 (guard SPI) |
+
+> **FGAP v2 alone**: `manage` scope encompasses both update AND delete — there is no separate `delete` scope. The `delegated-admin-guard` SPI (event listener + `setRollbackOnly()`) is required to block delete on own clients and all client-scope mutations.
+
+## Client Scopes Security Gap
+
+**FGAP v2 has NO resource type for `ClientScopes`.**
+
+The four resource types are: `Clients`, `Groups`, `Roles`, `Users`. Client Scopes are absent.
+
+As a result, a user with global `manage` on the `Clients` resource type **has full, ungated access** to:
+- `GET /admin/realms/{realm}/client-scopes` → 200 (list all)
+- `POST /admin/realms/{realm}/client-scopes` → 201 (create)
+- `PUT /admin/realms/{realm}/client-scopes/{id}` → 204 (update, including system scopes like `acr`, `profile`)
+- `DELETE /admin/realms/{realm}/client-scopes/{id}` → 204 (**can delete system scopes!**)
+
+This was verified empirically — a user with only `client-manager` role and FGAP v2 permissions could **delete the `acr` system scope** without restriction.
+
+The `delegated-admin-guard` EventListener SPI addresses this via `setRollbackOnly()`. See `keycloak-delegated-admin-guard-spi.md` for details.
 
 ## Important Gotchas
 
@@ -369,16 +389,16 @@ The `admin-permissions` client is auto-created by Keycloak the first time `admin
 
 | File | Purpose |
 |---|---|
-| `scripts/step6_fgap_api_setup.py` | FGAP v2 bootstrap script |
-| `scripts/test_step6_delegation.py` | Delegation behaviour tests |
+| `scripts/step6_fgap_api_setup.py` | FGAP v2 bootstrap + event listener registration |
+| `scripts/test_step6_delegation.py` | 7-test delegation behaviour suite |
+| `custom-delegated-admin-guard-spi/` | Guard SPI JAR source |
 | `scripts/list_authz_resources.py` | Inspect admin-permissions resources |
 | `scripts/list_authz_scopes.py` | Inspect admin-permissions scopes |
-| `tests/step6_fgap/` | Docker-based test service |
 | `docker-compose.yml` | `step6-fgap-init` service definition |
 
 ## Related KB Articles
 
+- **`keycloak-delegated-admin-guard-spi.md`** — Guard SPI: blocking deletes + client-scope mutations
 - `keycloak-authorization-services.md` — General Authorization Services concepts
 - `keycloak-roles-groups.md` — Role and group management
-- `keycloak-admin-interface-security.md` — Admin interface security overview
-- `keycloak-spi.md` — Custom SPI development (needed for delete restriction)
+- `keycloak-spi.md` — Custom SPI development patterns
