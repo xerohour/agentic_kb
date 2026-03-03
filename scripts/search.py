@@ -92,7 +92,7 @@ def file_hash(path: Path) -> str:
 
 
 def safe_key(path: Path) -> str:
-    return str(path.relative_to(KB_ROOT)).replace("/", "__")
+    return str(path.relative_to(KB_ROOT)).replace("/", "__").replace("\\", "__")
 
 
 def load_cache_index() -> dict:
@@ -139,6 +139,7 @@ def build_index(model: SentenceTransformer) -> None:
                 texts, normalize_embeddings=True, show_progress_bar=False
             )
             embeddings = np.asarray(embeddings, dtype="float32")
+            cache_meta_path.parent.mkdir(parents=True, exist_ok=True)
             cache_meta_path.write_text(
                 json.dumps(
                     {"hash": current_hash, "chunks": [c.__dict__ for c in chunks]},
